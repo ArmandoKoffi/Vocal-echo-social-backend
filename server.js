@@ -24,7 +24,9 @@ const createDefaultAvatar = (gender, filename) => {
   const targetPath = path.join(defaultAvatarsDir, `default-${gender}.png`);
   const sourcePath = path.join(__dirname, "default-avatars", filename);
 
+  // Ne créer que si le fichier n'existe pas déjà
   if (!fs.existsSync(targetPath)) {
+    // Utiliser un avatar générique si le fichier source n'existe pas
     if (
       !fs.existsSync(sourcePath) &&
       fs.existsSync(path.join(__dirname, "default-avatars", "male.png"))
@@ -40,6 +42,7 @@ const createDefaultAvatar = (gender, filename) => {
   }
 };
 
+// Créer des avatars par défaut
 createDefaultAvatar("male", "male.png");
 createDefaultAvatar("female", "female.png");
 createDefaultAvatar("other", "other.png");
@@ -55,54 +58,38 @@ const contactRoutes = require("./routes/contact");
 const app = express();
 const server = http.createServer(app);
 
-// Configuration CORS mise à jour
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://vocal-echo-social-frontend.vercel.app"
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true
-}));
-
-// Middleware pour rendre io accessible dans les routes
+// Configuration du socket.io pour les notifications en temps réel
 const io = socketIo(server, {
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"]
-  }
+    origin: "https://vocal-echo-social-backend.onrender.com",
+    methods: ["GET", "POST"],
+  },
 });
 
+// Middleware pour rendre io accessible dans les routes
 app.use((req, res, next) => {
   req.io = io;
   next();
 });
 
+// Middleware
+app.use(cors());
 app.use(express.json());
-
 app.use(
   fileUpload({
     useTempFiles: true,
     tempFileDir: "/tmp/",
     createParentPath: true,
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+    limits: { fileSize: 50 * 1024 * 1024 }, // Limite à 50MB
   })
 );
 
-// Dossiers statiques
-app.use("/uploads", express.static(uploadDir));
-app.use("/uploads/comments-audio", express.static(commentsAudioDir));
+// Dossier static pour les uploads
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads/comments-audio", express.static(path.join(__dirname, "uploads/comments-audio")));
 
-app.use("/uploads/audio", express.static(audioDir, {
+// Dossier static spécifique pour les fichiers audio avec headers personnalisés
+app.use("/uploads/audio", express.static(path.join(__dirname, "uploads/audio"), {
   setHeaders: (res, path) => {
     if (path.endsWith('.mp3')) {
       res.set('Content-Type', 'audio/mpeg');
@@ -112,7 +99,11 @@ app.use("/uploads/audio", express.static(audioDir, {
   }
 }));
 
-app.use("/default-avatars", express.static(defaultAvatarsDir));
+app.use(
+  "/default-avatars",
+  express.static(path.join(__dirname, "default-avatars"))
+);
+
 
 // Routes
 app.use("/api/auth", authRoutes);
@@ -121,7 +112,6 @@ app.use("/api/users", usersRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contact", contactRoutes);
-app.use("/api/healthcheck", healthcheckRoutes);
 
 // Gestion des erreurs
 app.use((err, req, res, next) => {
@@ -131,6 +121,7 @@ app.use((err, req, res, next) => {
     message: err.message || "Une erreur est survenue sur le serveur",
   });
 });
+app.use("/api/healthcheck", healthcheckRoutes);
 
 // Socket.io events
 io.on("connection", (socket) => {
@@ -146,11 +137,12 @@ io.on("connection", (socket) => {
   });
 });
 
-// Connexion MongoDB + démarrage serveur
+// Connexion à MongoDB
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => {
     console.log("Connecté à MongoDB");
+    // Démarrage du serveur
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`Serveur démarré sur le port ${PORT}`);
