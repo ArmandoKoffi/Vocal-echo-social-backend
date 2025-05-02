@@ -41,8 +41,8 @@ const UserSchema = new mongoose.Schema({
   get: (avatar) => {
     // Transforme le chemin en URL absolue lorsqu'on accède au champ
     if (!avatar) return avatar;
-    if (avatar.startsWith('http')) return avatar;
-    return `${process.env.BASE_URL || 'http://localhost:5000'}${avatar}`;
+    if (avatar.startsWith('https')) return avatar;
+    return `${process.env.BASE_URL || 'https://vocal-echo-social-backend.onrender.com'}${avatar}`;
   }
 },
   bio: {
