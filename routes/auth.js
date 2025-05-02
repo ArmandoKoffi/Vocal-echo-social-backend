@@ -430,7 +430,7 @@ router.post("/forgot-password", passwordResetLimiter, async (req, res) => {
     await user.save({ validateBeforeSave: false });
 
     // Envoyer l'email de réinitialisation
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL || "https://vocal-echo-social-backend.onrender.com";
     const emailResult = await sendPasswordResetEmail(
       user.email,
       newPassword,
