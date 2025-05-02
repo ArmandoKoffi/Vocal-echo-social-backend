@@ -130,7 +130,7 @@ UserSchema.set("toJSON", {
   transform: function (doc, ret) {
     // Convertit les chemins relatifs en URLs absolues
     if (ret.avatar && !ret.avatar.startsWith("http")) {
-      ret.avatar = `${process.env.BASE_URL || "http://localhost:5000"}${
+      ret.avatar = `${process.env.BASE_URL || "https://vocal-echo-social-backend.onrender.com"}${
         ret.avatar
       }`;
     }
