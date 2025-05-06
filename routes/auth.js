@@ -191,16 +191,14 @@ router.put(
   "/update-profile",
   protect,
   (req, res, next) => {
-    upload.single("avatar")(req, res, function (err) {
-      if (err instanceof multer.MulterError) {
+    upload.single("avatar")(req, res, (err) => {
+      if (err) {
+        console.error("Upload error:", err);
         return res.status(400).json({
           success: false,
-          message: err.message,
-        });
-      } else if (err) {
-        return res.status(500).json({
-          success: false,
-          message: "Erreur lors du traitement de l'image",
+          message: err.message.includes("File too large")
+            ? "Le fichier ne doit pas dépasser 5MB"
+            : "Seuls les JPG/PNG sont acceptés",
         });
       }
       next();
@@ -209,28 +207,34 @@ router.put(
   async (req, res) => {
     try {
       const user = await User.findById(req.user.id);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "Utilisateur non trouvé",
-        });
-      }
+      if (!user)
+        return res
+          .status(404)
+          .json({ success: false, message: "Utilisateur non trouvé" });
 
-      // Update fields
-      if (req.body.username) user.username = req.body.username;
-      if (req.body.bio) user.bio = req.body.bio;
-      if (req.body.email) user.email = req.body.email;
+      // Mise à jour des champs
+      const updates = ["username", "email", "bio"];
+      updates.forEach((field) => {
+        if (req.body[field]) user[field] = req.body[field];
+      });
 
+      // Gestion de l'avatar
       if (req.file) {
-        // Delete old avatar if not default
-        const isDefault = Object.values(DEFAULT_AVATARS).includes(user.avatar);
-        if (!isDefault && user.avatar) {
-          const publicId = user.avatar
-            .split("/")
-            .slice(-2)
-            .join("/")
-            .split(".")[0];
-          await cloudinary.uploader.destroy(publicId);
+        // Suppression ancien avatar si non par défaut
+        const isDefaultAvatar = Object.values(DEFAULT_AVATARS).includes(
+          user.avatar
+        );
+        if (!isDefaultAvatar && user.avatar) {
+          try {
+            const publicId = user.avatar
+              .split("/")
+              .slice(-2)
+              .join("/")
+              .split(".")[0];
+            await cloudinary.uploader.destroy(publicId);
+          } catch (err) {
+            console.error("Erreur suppression ancien avatar:", err);
+          }
         }
         user.avatar = req.file.path;
       }
@@ -240,20 +244,15 @@ router.put(
       res.json({
         success: true,
         data: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          avatar: user.avatar,
-          bio: user.bio,
-          gender: user.gender,
-          isAdmin: user.isAdmin,
+          ...user.toObject(),
+          password: undefined,
         },
       });
     } catch (error) {
-      console.error("Update profile error:", error);
+      console.error("Update error:", error);
       res.status(500).json({
         success: false,
-        message: "Erreur serveur",
+        message: "Erreur serveur lors de la mise à jour",
       });
     }
   }
