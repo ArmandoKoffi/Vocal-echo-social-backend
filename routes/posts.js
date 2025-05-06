@@ -1,30 +1,39 @@
 
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Post = require('../models/Post');
-const User = require('../models/User');
-const Notification = require('../models/Notification');
-const { protect } = require('../middleware/auth');
+const Post = require("../models/Post");
+const User = require("../models/User");
+const Notification = require("../models/Notification");
+const { protect } = require("../middleware/auth");
 const mongoose = require("mongoose");
-const path = require('path');
-const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
-// Assurer que les répertoires existent
-const ensureDirectoryExists = (dirPath) => {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+// Configuration Cloudinary pour les posts audio
+const postStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'audio-posts',
+    resource_type: 'auto',
+    allowed_formats: ['mp3', 'wav', 'ogg', 'm4a'],
+    format: 'mp3'
   }
-};
+});
 
-// Créer les répertoires nécessaires
-const uploadDir = path.join(__dirname, '../uploads');
-const audioDir = path.join(uploadDir, 'audio');
-const commentAudioDir = path.join(uploadDir, 'comments');
+// Configuration Cloudinary pour les commentaires audio
+const commentStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'audio-comments',
+    resource_type: 'auto',
+    allowed_formats: ['mp3', 'wav', 'ogg', 'm4a'],
+    format: 'mp3'
+  }
+});
 
-ensureDirectoryExists(uploadDir);
-ensureDirectoryExists(audioDir);
-ensureDirectoryExists(commentAudioDir);
+const uploadPostAudio = multer({ storage: postStorage });
+const uploadCommentAudio = multer({ storage: commentStorage });
 
 // @route   GET /api/posts
 // @desc    Récupérer tous les posts
@@ -88,88 +97,48 @@ router.get('/', protect, async (req, res) => {
 // @route   POST /api/posts
 // @desc    Créer un nouveau post vocal
 // @access  Private
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, uploadPostAudio.single('audio'), async (req, res) => {
   try {
     const { description, audioDuration } = req.body;
 
-    // Vérifier si un fichier audio a été uploadé
-    if (!req.files || !req.files.audio) {
+    if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Veuillez uploader un fichier audio'
+        message: 'Veuillez uploader un fichier audio valide'
       });
     }
 
-    const audioFile = req.files.audio;
+    const post = await Post.create({
+      userId: req.user.id,
+      audioUrl: req.file.path,
+      audioDuration: parseFloat(audioDuration) || 0,
+      description: description || ''
+    });
 
-    // Vérifier le type de fichier
-    if (!audioFile.mimetype.startsWith('audio')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Le fichier doit être un audio'
-      });
-    }
+    await User.findByIdAndUpdate(req.user.id, { $inc: { postsCount: 1 } });
+    const user = await User.findById(req.user.id);
 
-    // Vérifier la taille du fichier (max 10MB)
-    if (audioFile.size > 10 * 1024 * 1024) {
-      return res.status(400).json({
-        success: false,
-        message: 'Le fichier audio ne doit pas dépasser 10Mo'
-      });
-    }
-
-    // Créer un nom de fichier unique
-    const filename = `post_${uuidv4()}.mp3`;
-
-    // Chemin du fichier audio
-    const audioPath = path.join(audioDir, filename);
-
-    // Déplacer le fichier
-    audioFile.mv(audioPath, async (err) => {
-      if (err) {
-        console.error('Erreur lors de l\'upload de l\'audio:', err);
-        return res.status(500).json({
-          success: false,
-          message: 'Problème lors de l\'upload de l\'audio'
-        });
-      }
-
-      // Créer le post dans la base de données
-      const post = await Post.create({
+    res.status(201).json({
+      success: true,
+      data: {
+        id: post._id,
         userId: req.user.id,
-        audioUrl: `/uploads/audio/${filename}`,
-        audioDuration: parseFloat(audioDuration) || 0,
-        description: description || ''
-      });
-
-      // Mettre à jour le compteur de posts de l'utilisateur
-      await User.findByIdAndUpdate(req.user.id, { $inc: { postsCount: 1 } });
-
-      const user = await User.findById(req.user.id);
-
-      // Retourner le post créé
-      res.status(201).json({
-        success: true,
-        data: {
-          id: post._id,
-          userId: req.user.id,
-          username: user.username,
-          avatar: user.avatar,
-          audioUrl: post.audioUrl,
-          audioDuration: post.audioDuration,
-          description: post.description,
-          timestamp: post.timestamp,
-          likes: 0,
-          comments: [],
-          hasLiked: false
-        }
-      });
+        username: user.username,
+        avatar: user.avatar,
+        audioUrl: post.audioUrl,
+        audioDuration: post.audioDuration,
+        description: post.description,
+        timestamp: post.timestamp,
+        likes: 0,
+        comments: [],
+        hasLiked: false
+      }
     });
   } catch (err) {
-    console.error('Erreur lors de la création du post:', err);
+    console.error('Erreur création post:', err);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la création du post'
+      message: 'Erreur création post'
     });
   }
 });
@@ -223,54 +192,55 @@ router.post("/:id/like", protect, async (req, res) => {
 // @route   POST /api/posts/:id/comment
 // @desc    Commenter un post
 // @access  Private
-router.post("/:id/comment", protect, async (req, res) => {
-  try {
-    // Ajoutez ces 2 lignes cruciales
-    const post = await Post.findById(req.params.id);
-    if (!post) return res.status(404).json({ success: false, message: "Post non trouvé" });
+router.post(
+  "/:id/comment",
+  protect,
+  uploadCommentAudio.single("audio"),
+  async (req, res) => {
+    try {
+      const post = await Post.findById(req.params.id);
+      if (!post)
+        return res
+          .status(404)
+          .json({ success: false, message: "Post non trouvé" });
 
-    const user = await User.findById(req.user.id);
-    const { content, audioDuration } = req.body; // Récupération correcte de audioDuration
+      const user = await User.findById(req.user.id);
+      const { content, audioDuration } = req.body;
 
-    const newComment = {
-      _id: new mongoose.Types.ObjectId(),
-      userId: user._id,
-      username: user.username,
-      avatar: user.avatar,
-      content: content || "",
-      timestamp: new Date(),
-    };
+      const newComment = {
+        _id: new mongoose.Types.ObjectId(),
+        userId: user._id,
+        username: user.username,
+        avatar: user.avatar,
+        content: content || "",
+        timestamp: new Date(),
+      };
 
-    if (req.files?.audio) {
-      const audioFile = req.files.audio;
-      const filename = `comment_${uuidv4()}.mp3`;
-      const audioPath = path.join(commentAudioDir, filename);
-
-      await audioFile.mv(audioPath);
-      newComment.audioUrl = `/uploads/comments-audio/${filename}`;
-      newComment.audioDuration = parseFloat(audioDuration); // Utilisation correcte de req.body.audioDuration
-    }
-
-    post.comments.push(newComment);
-    await post.save(); // Sauvegarde directe sans variable intermédiaire
-
-    res.status(201).json({
-      success: true,
-      data: {
-        ...newComment,
-        id: newComment._id,
+      if (req.file) {
+        newComment.audioUrl = req.file.path;
+        newComment.audioDuration = parseFloat(audioDuration) || 0;
       }
-    });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      success: false,
-      message: "Échec technique",
-      error: err.message
-    });
+      post.comments.push(newComment);
+      await post.save();
+
+      res.status(201).json({
+        success: true,
+        data: {
+          ...newComment,
+          id: newComment._id,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({
+        success: false,
+        message: "Erreur technique",
+        error: err.message,
+      });
+    }
   }
-});
+);
 
 // @route   GET /api/posts/user/:userId
 // @desc    Récupérer les posts d'un utilisateur
@@ -334,62 +304,38 @@ router.get('/user/:userId', protect, async (req, res) => {
 // @route   DELETE /api/posts/:id
 // @desc    Supprimer un post
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete("/:id", protect, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
+    if (!post)
+      return res
+        .status(404)
+        .json({ success: false, message: "Post non trouvé" });
 
-    if (!post) {
-      return res.status(404).json({
-        success: false,
-        message: 'Post non trouvé'
-      });
-    }
-
-    // Vérifier si l'utilisateur est l'auteur du post
     if (post.userId.toString() !== req.user.id) {
-      return res.status(401).json({
-        success: false,
-        message: 'Non autorisé à supprimer ce post'
-      });
+      return res.status(401).json({ success: false, message: "Non autorisé" });
     }
 
-    // Supprimer le fichier audio
-    if (post.audioUrl) {
-      const audioPath = path.join(__dirname, '..', post.audioUrl);
-      if (fs.existsSync(audioPath)) {
-        fs.unlinkSync(audioPath);
-      }
-    }
+    // Fonction pour supprimer de Cloudinary
+    const deleteFromCloudinary = async (url) => {
+      const publicId = url.split("/").slice(-2).join("/").split(".")[0];
+      await cloudinary.uploader.destroy(publicId, { resource_type: "video" });
+    };
 
-    // Supprimer les fichiers audio des commentaires
+    if (post.audioUrl) await deleteFromCloudinary(post.audioUrl);
+
     for (const comment of post.comments) {
-      if (comment.audioUrl) {
-        const commentAudioPath = path.join(__dirname, '..', comment.audioUrl);
-        if (fs.existsSync(commentAudioPath)) {
-          fs.unlinkSync(commentAudioPath);
-        }
-      }
+      if (comment.audioUrl) await deleteFromCloudinary(comment.audioUrl);
     }
 
-    // Supprimer les notifications liées au post
     await Notification.deleteMany({ postId: post._id });
-
-    // Supprimer le post
     await post.deleteOne();
-
-    // Mettre à jour le compteur de posts de l'utilisateur
     await User.findByIdAndUpdate(req.user.id, { $inc: { postsCount: -1 } });
 
-    res.status(200).json({
-      success: true,
-      message: 'Post supprimé avec succès'
-    });
+    res.status(200).json({ success: true, message: "Post supprimé" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la suppression du post'
-    });
+    res.status(500).json({ success: false, message: "Erreur suppression" });
   }
 });
 
