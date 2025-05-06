@@ -2,50 +2,38 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const fileUpload = require("express-fileupload");
-const path = require("path");
 const http = require("http");
 const socketIo = require("socket.io");
-const fs = require("fs");
-const createUploadDirectories = require("./createDirectories");
-const healthcheckRoutes = require("./routes/healthcheck");
 
-// Création des répertoires nécessaires
-createUploadDirectories();
+const app = express();
+const server = http.createServer(app);
 
-const uploadDir = path.join(__dirname, "uploads");
-const audioDir = path.join(uploadDir, "audio");
-const commentsAudioDir = path.join(uploadDir, "comments-audio");
-const avatarDir = path.join(uploadDir, "avatars");
-const defaultAvatarsDir = path.join(__dirname, "default-avatars");
+// Configuration Socket.io
+const io = socketIo(server, {
+  cors: {
+    origin:
+      process.env.FRONTEND_URL ||
+      "https://vocal-echo-social-frontend.vercel.app",
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
 
-// Initialiser les avatars par défaut
-const createDefaultAvatar = (gender, filename) => {
-  const targetPath = path.join(defaultAvatarsDir, `default-${gender}.png`);
-  const sourcePath = path.join(__dirname, "default-avatars", filename);
+// Middleware global pour Socket.io
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
 
-  // Ne créer que si le fichier n'existe pas déjà
-  if (!fs.existsSync(targetPath)) {
-    // Utiliser un avatar générique si le fichier source n'existe pas
-    if (
-      !fs.existsSync(sourcePath) &&
-      fs.existsSync(path.join(__dirname, "default-avatars", "male.png"))
-    ) {
-      fs.copyFileSync(
-        path.join(__dirname, "default-avatars", "male.png"),
-        targetPath
-      );
-    } else if (fs.existsSync(sourcePath)) {
-      fs.copyFileSync(sourcePath, targetPath);
-    }
-    console.log(`Creating default avatar for ${gender}`);
-  }
-};
-
-// Créer des avatars par défaut
-createDefaultAvatar("male", "male.png");
-createDefaultAvatar("female", "female.png");
-createDefaultAvatar("other", "other.png");
+// Middleware de base
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL,
+    credentials: true,
+  })
+);
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Import des routes
 const authRoutes = require("./routes/auth");
@@ -54,101 +42,62 @@ const usersRoutes = require("./routes/users");
 const notificationsRoutes = require("./routes/notifications");
 const adminRoutes = require("./routes/admin");
 const contactRoutes = require("./routes/contact");
+const healthcheckRoutes = require("./routes/healthcheck");
 
-const app = express();
-const server = http.createServer(app);
-
-// Configuration du socket.io pour les notifications en temps réel
-const io = socketIo(server, {
-  cors: {
-    origin: "https://vocal-echo-social-backend.onrender.com",
-    methods: ["GET", "POST"],
-  },
-});
-
-// Middleware pour rendre io accessible dans les routes
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(
-  fileUpload({
-    useTempFiles: true,
-    tempFileDir: "/tmp/",
-    createParentPath: true,
-    limits: { fileSize: 50 * 1024 * 1024 }, // Limite à 50MB
-  })
-);
-
-// Dossier static pour les uploads
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-app.use("/uploads/comments-audio", express.static(path.join(__dirname, "uploads/comments-audio")));
-
-// Dossier static spécifique pour les fichiers audio avec headers personnalisés
-app.use("/uploads/audio", express.static(path.join(__dirname, "uploads/audio"), {
-  setHeaders: (res, path) => {
-    if (path.endsWith('.mp3')) {
-      res.set('Content-Type', 'audio/mpeg');
-      res.set('Accept-Ranges', 'bytes');
-      res.set('Access-Control-Allow-Origin', '*');
-    }
-  }
-}));
-
-app.use(
-  "/default-avatars",
-  express.static(path.join(__dirname, "default-avatars"))
-);
-
-
-// Routes
+// Configuration des routes
 app.use("/api/auth", authRoutes);
 app.use("/api/posts", postsRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contact", contactRoutes);
+app.use("/api/healthcheck", healthcheckRoutes);
 
 // Gestion des erreurs
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).send({
+  res.status(500).json({
     success: false,
-    message: err.message || "Une erreur est survenue sur le serveur",
-  });
-});
-app.use("/api/healthcheck", healthcheckRoutes);
-
-// Socket.io events
-io.on("connection", (socket) => {
-  console.log("Un utilisateur est connecté", socket.id);
-
-  socket.on("join", (userId) => {
-    socket.join(userId);
-    console.log(`Utilisateur ${userId} a rejoint sa salle privée`);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Utilisateur déconnecté");
+    message:
+      process.env.NODE_ENV === "production" ? "Erreur serveur" : err.message,
   });
 });
 
-// Connexion à MongoDB
+// Connexion à MongoDB avec meilleures pratiques
 mongoose
-  .connect(process.env.MONGODB_URI)
+  .connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    serverSelectionTimeoutMS: 5000,
+  })
   .then(() => {
-    console.log("Connecté à MongoDB");
+    console.log("✅ Connecté à MongoDB avec succès");
+
     // Démarrage du serveur
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
-      console.log(`Serveur démarré sur le port ${PORT}`);
+      console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+      console.log(`🌍 Environnement: ${process.env.NODE_ENV}`);
+      console.log(`🔗 Frontend URL: ${process.env.FRONTEND_URL}`);
+      console.log(`☁️  Cloudinary Cloud: ${process.env.CLOUDINARY_CLOUD_NAME}`);
     });
   })
   .catch((err) => {
-    console.error("Erreur de connexion à MongoDB:", err.message);
+    console.error("❌ Échec de la connexion à MongoDB:", err.message);
     process.exit(1);
   });
+
+// Gestion des connexions Socket.io
+io.on("connection", (socket) => {
+  console.log(`⚡ Nouvelle connexion Socket.io: ${socket.id}`);
+
+  socket.on("join", (userId) => {
+    socket.join(userId);
+    console.log(`👤 Utilisateur ${userId} connecté à sa room`);
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`🔌 Déconnexion Socket.io: ${socket.id}`);
+  });
+});
+
