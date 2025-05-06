@@ -32,9 +32,15 @@ const UserSchema = new mongoose.Schema({
   },
   avatar: {
     type: String,
-    default: function() {
+    validate: {
+      validator: function (v) {
+        return /^https?:\/\//.test(v);
+      },
+      message: (props) => `${props.value} n'est pas une URL valide!`,
+    },
+    default: function () {
       return DEFAULT_AVATARS[this.gender] || DEFAULT_AVATARS.other;
-    }
+    },
   },
   bio: {
     type: String,

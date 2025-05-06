@@ -14,6 +14,9 @@ const {
   authLimiter,
   passwordResetLimiter,
 } = require("../middleware/rateLimiter");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const multer = require("multer");
 
 // Configuration identique à celle du modèle
 const DEFAULT_AVATARS = {
@@ -21,6 +24,25 @@ const DEFAULT_AVATARS = {
   female: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492000/default-avatars/default-female.png',
   other: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492001/default-avatars/default-other.png'
 };
+
+// Configurez Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configurez le stockage Cloudinary pour les avatars
+const avatarStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'user-avatars',
+    allowed_formats: ['jpg', 'jpeg', 'png'],
+    transformation: [{ width: 500, height: 500, crop: 'limit' }]
+  }
+});
+
+const uploadAvatar = multer({ storage: avatarStorage });
 
 // @route   POST /api/auth/register
 // @desc    Register a new user
@@ -162,100 +184,42 @@ router.get("/me", protect, async (req, res) => {
 // @route   PUT /api/auth/update-profile
 // @desc    Update user profile
 // @access  Private
-router.put("/update-profile", protect, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "Utilisateur non trouvé",
-      });
-    }
-
-    // Mettre à jour les champs de base
-    if (req.body.username) user.username = req.body.username;
-    if (req.body.bio) user.bio = req.body.bio;
-    if (req.body.email) user.email = req.body.email;
-
-    // Traiter l'avatar si fourni
-    if (req.files && req.files.avatar) {
-      const avatar = req.files.avatar;
-
-      // Vérifier le type de fichier
-      const validTypes = ["image/jpeg", "image/jpg", "image/png"];
-      if (!validTypes.includes(avatar.mimetype)) {
-        return res.status(400).json({
+router.put(
+  "/update-profile",
+  protect,
+  uploadAvatar.single("avatar"),
+  async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
           success: false,
-          message: "Veuillez télécharger une image au format jpg, jpeg ou png",
+          message: "Utilisateur non trouvé",
         });
       }
 
-      // Vérifier la taille
-      if (avatar.size > 5 * 1024 * 1024) {
-        return res.status(400).json({
-          success: false,
-          message: "L'image doit faire moins de 5Mo",
-        });
-      }
+      // Mettre à jour les champs de base
+      if (req.body.username) user.username = req.body.username;
+      if (req.body.bio) user.bio = req.body.bio;
+      if (req.body.email) user.email = req.body.email;
 
-      // Créer un nom de fichier personnalisé incluant l'ID de l'utilisateur
-      const filename = `user-${user._id}.${avatar.mimetype.split("/")[1]}`;
-
-      // Assurer que le répertoire existe
-      const avatarDir = path.join(__dirname, "../uploads/avatars");
-      if (!fs.existsSync(avatarDir)) {
-        fs.mkdirSync(avatarDir, { recursive: true });
-      }
-
-      // Chemin complet du fichier
-      const avatarPath = path.join(avatarDir, filename);
-
-      // Déplacer le fichier
-      avatar.mv(avatarPath, async (err) => {
-        if (err) {
-          console.error("Erreur lors du téléchargement de l'image:", err);
-          return res.status(500).json({
-            success: false,
-            message: "Erreur lors du téléchargement de l'image",
-          });
+      // Si un nouvel avatar est uploadé
+      if (req.file) {
+        // Supprimer l'ancien avatar de Cloudinary si ce n'est pas un avatar par défaut
+        const isDefaultAvatar = Object.values(DEFAULT_AVATARS).includes(
+          user.avatar
+        );
+        if (!isDefaultAvatar && user.avatar) {
+          const publicId = user.avatar
+            .split("/")
+            .slice(-2)
+            .join("/")
+            .split(".")[0];
+          await cloudinary.uploader.destroy(publicId);
         }
+        user.avatar = req.file.path;
+      }
 
-        // Supprimer l'ancien avatar si ce n'est pas l'avatar par défaut
-        if (
-          user.avatar &&
-          !user.avatar.includes("default-male.png") &&
-          !user.avatar.includes("default-female.png") &&
-          !user.avatar.includes("default-other.png")
-        ) {
-          const oldAvatarPath = path.join(__dirname, "..", user.avatar);
-          if (fs.existsSync(oldAvatarPath)) {
-            fs.unlinkSync(oldAvatarPath);
-          }
-        }
-
-        // Mettre à jour le chemin de l'avatar
-        user.avatar = `/uploads/avatars/${filename}`;
-        await user.save();
-
-        res.json({
-          success: true,
-          data: {
-            id: user._id,
-            username: user.username,
-            email: user.email,
-            avatar: user.avatar,
-            bio: user.bio,
-            gender: user.gender,
-            followersCount: user.followersCount,
-            followingCount: user.followingCount,
-            postsCount: user.postsCount,
-            isAdmin: user.isAdmin,
-          },
-        });
-      });
-    } else {
-      // Enregistrer les modifications sans avatar
       await user.save();
 
       res.json({
@@ -273,15 +237,15 @@ router.put("/update-profile", protect, async (req, res) => {
           isAdmin: user.isAdmin,
         },
       });
+    } catch (error) {
+      console.error("Erreur mise à jour profil:", error);
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la mise à jour",
+      });
     }
-  } catch (error) {
-    console.error("Erreur lors de la mise à jour du profil:", error);
-    res.status(500).json({
-      success: false,
-      message: "Erreur lors de la mise à jour du profil",
-    });
   }
-});
+);
 
 // @route   PUT /api/auth/reset-avatar
 // @desc    Réinitialiser l'avatar de l'utilisateur à sa valeur par défaut
