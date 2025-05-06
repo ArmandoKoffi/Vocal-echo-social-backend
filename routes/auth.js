@@ -25,24 +25,27 @@ const DEFAULT_AVATARS = {
   other: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492001/default-avatars/default-other.png'
 };
 
-// Configurez Cloudinary
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Configurez le stockage Cloudinary pour les avatars
-const avatarStorage = new CloudinaryStorage({
+// Configure storage
+const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'user-avatars',
-    allowed_formats: ['jpg', 'jpeg', 'png'],
-    transformation: [{ width: 500, height: 500, crop: 'limit' }]
+    folder: "user-avatars",
+    allowed_formats: ["jpg", "jpeg", "png"],
+    transformation: [{ width: 500, height: 500, crop: "limit" }]
   }
 });
 
-const uploadAvatar = multer({ storage: avatarStorage });
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
 
 // @route   POST /api/auth/register
 // @desc    Register a new user
@@ -187,7 +190,22 @@ router.get("/me", protect, async (req, res) => {
 router.put(
   "/update-profile",
   protect,
-  uploadAvatar.single("avatar"),
+  (req, res, next) => {
+    upload.single("avatar")(req, res, function (err) {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+        });
+      } else if (err) {
+        return res.status(500).json({
+          success: false,
+          message: "Erreur lors du traitement de l'image",
+        });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       const user = await User.findById(req.user.id);
@@ -198,18 +216,15 @@ router.put(
         });
       }
 
-      // Mettre à jour les champs de base
+      // Update fields
       if (req.body.username) user.username = req.body.username;
       if (req.body.bio) user.bio = req.body.bio;
       if (req.body.email) user.email = req.body.email;
 
-      // Si un nouvel avatar est uploadé
       if (req.file) {
-        // Supprimer l'ancien avatar de Cloudinary si ce n'est pas un avatar par défaut
-        const isDefaultAvatar = Object.values(DEFAULT_AVATARS).includes(
-          user.avatar
-        );
-        if (!isDefaultAvatar && user.avatar) {
+        // Delete old avatar if not default
+        const isDefault = Object.values(DEFAULT_AVATARS).includes(user.avatar);
+        if (!isDefault && user.avatar) {
           const publicId = user.avatar
             .split("/")
             .slice(-2)
@@ -231,17 +246,14 @@ router.put(
           avatar: user.avatar,
           bio: user.bio,
           gender: user.gender,
-          followersCount: user.followersCount,
-          followingCount: user.followingCount,
-          postsCount: user.postsCount,
           isAdmin: user.isAdmin,
         },
       });
     } catch (error) {
-      console.error("Erreur mise à jour profil:", error);
+      console.error("Update profile error:", error);
       res.status(500).json({
         success: false,
-        message: "Erreur lors de la mise à jour",
+        message: "Erreur serveur",
       });
     }
   }
