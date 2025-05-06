@@ -1,11 +1,10 @@
+
 const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { protect } = require("../middleware/auth");
-const path = require("path");
-const fs = require("fs");
 const { sendPasswordResetEmail } = require("../utils/emailUtils");
 const {
   generateStrongPassword,
@@ -16,6 +15,13 @@ const {
   passwordResetLimiter,
 } = require("../middleware/rateLimiter");
 
+// Configuration identique à celle du modèle
+const DEFAULT_AVATARS = {
+  male: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746491998/default-avatars/default-male.png',
+  female: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492000/default-avatars/default-female.png',
+  other: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492001/default-avatars/default-other.png'
+};
+
 // @route   POST /api/auth/register
 // @desc    Register a new user
 // @access  Public
@@ -23,9 +29,7 @@ router.post("/register", async (req, res) => {
   try {
     const { username, email, password, gender } = req.body;
 
-    // Vérifier si l'utilisateur existe déjà
     let user = await User.findOne({ email });
-
     if (user) {
       return res.status(400).json({
         success: false,
@@ -33,24 +37,14 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Assigner un avatar par défaut en fonction du genre
-    let defaultAvatar = "/default-avatars/default-other.png";
-    if (gender === "male") {
-      defaultAvatar = "/default-avatars/default-male.png";
-    } else if (gender === "female") {
-      defaultAvatar = "/default-avatars/default-female.png";
-    }
-
-    // Créer un nouvel utilisateur
     user = new User({
       username,
       email,
       password,
       gender,
-      avatar: defaultAvatar,
+      avatar: DEFAULT_AVATARS[gender] || DEFAULT_AVATARS.other,
     });
 
-    // Enregistrer l'utilisateur
     await user.save();
 
     res.status(201).json({
@@ -78,8 +72,6 @@ router.post("/register", async (req, res) => {
 router.post("/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    // Vérifier si l'utilisateur existe
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
@@ -89,9 +81,7 @@ router.post("/login", authLimiter, async (req, res) => {
       });
     }
 
-    // Vérifier le mot de passe
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
       return res.status(400).json({
         success: false,
@@ -99,9 +89,8 @@ router.post("/login", authLimiter, async (req, res) => {
       });
     }
 
-    // Créer et retourner le token JWT
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "30d",
+      expiresIn: "90d",
     });
 
     res.json({
@@ -307,19 +296,9 @@ router.put("/reset-avatar", protect, async (req, res) => {
       });
     }
 
-    // Déterminer l'avatar par défaut basé sur le genre de l'utilisateur
-    let defaultAvatarPath = "/default-avatars/default-other.png";
-    if (user.gender === "male") {
-      defaultAvatarPath = "/default-avatars/default-male.png";
-    } else if (user.gender === "female") {
-      defaultAvatarPath = "/default-avatars/default-female.png";
-    }
-
-    // Met à jour l'avatar de l'utilisateur
-    user.avatar = defaultAvatarPath;
+    user.avatar = DEFAULT_AVATARS[user.gender] || DEFAULT_AVATARS.other;
     await user.save();
 
-    // Retourne l'utilisateur mis à jour
     res.status(200).json({
       success: true,
       data: {
@@ -332,7 +311,7 @@ router.put("/reset-avatar", protect, async (req, res) => {
         isAdmin: user.isAdmin,
         followersCount: user.followers.length,
         followingCount: user.following.length,
-        },
+      },
     });
   } catch (error) {
     console.error("Erreur lors de la réinitialisation de l'avatar:", error);

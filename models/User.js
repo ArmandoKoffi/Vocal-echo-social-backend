@@ -1,10 +1,13 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
-/**
- * Schéma de l'utilisateur
- * Définit la structure des données pour les utilisateurs dans MongoDB
- */
+// Configuration des avatars Cloudinary
+const DEFAULT_AVATARS = {
+  male: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746491998/default-avatars/default-male.png',
+  female: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492000/default-avatars/default-female.png',
+  other: 'https://res.cloudinary.com/dx9ihjr0f/image/upload/v1746492001/default-avatars/default-other.png'
+};
+
 const UserSchema = new mongoose.Schema({
   username: {
     type: String,
@@ -25,26 +28,14 @@ const UserSchema = new mongoose.Schema({
     type: String,
     required: [true, "Veuillez fournir un mot de passe"],
     minlength: 6,
-    select: false, // Ne pas inclure par défaut dans les requêtes
+    select: false,
   },
- avatar: {
-  type: String,
-  default: function () {
-    // Retourne directement le chemin relatif
-    if (this.gender === "female") {
-      return "/default-avatars/default-female.png";
-    } else if (this.gender === "male") {
-      return "/default-avatars/default-male.png";
+  avatar: {
+    type: String,
+    default: function() {
+      return DEFAULT_AVATARS[this.gender] || DEFAULT_AVATARS.other;
     }
-    return "/default-avatars/default-other.png";
   },
-  get: (avatar) => {
-    // Transforme le chemin en URL absolue lorsqu'on accède au champ
-    if (!avatar) return avatar;
-    if (avatar.startsWith('https')) return avatar;
-    return `${process.env.BASE_URL || 'https://vocal-echo-social-backend.onrender.com'}${avatar}`;
-  }
-},
   bio: {
     type: String,
     default: "",
@@ -88,34 +79,19 @@ const UserSchema = new mongoose.Schema({
   },
 });
 
-/**
- * Middleware pour hacher le mot de passe avant l'enregistrement
- * S'exécute automatiquement avant chaque sauvegarde
- */
 UserSchema.pre("save", async function (next) {
-  // Ne pas hacher à nouveau si le mot de passe n'a pas été modifié
   if (!this.isModified("password")) {
     return next();
   }
-
-  // Hacher le mot de passe
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-/**
- * Méthode pour comparer les mots de passe
- * Utilisée lors de la connexion pour vérifier le mot de passe
- */
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-/**
- * Middleware pour définir le premier utilisateur comme administrateur
- * Garantit qu'au moins un administrateur existe dans le système
- */
 UserSchema.pre("save", async function (next) {
   if (this.isNew) {
     const count = await mongoose.model("User").countDocuments();
@@ -128,12 +104,7 @@ UserSchema.pre("save", async function (next) {
 
 UserSchema.set("toJSON", {
   transform: function (doc, ret) {
-    // Convertit les chemins relatifs en URLs absolues
-    if (ret.avatar && !ret.avatar.startsWith("http")) {
-      ret.avatar = `${process.env.BASE_URL || "https://vocal-echo-social-backend.onrender.com"}${
-        ret.avatar
-      }`;
-    }
+    delete ret.password;
     return ret;
   },
 });
