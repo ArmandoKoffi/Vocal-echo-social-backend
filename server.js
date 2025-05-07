@@ -28,7 +28,14 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Configuration Socket.io
 const io = socketIo(server, {
-  cors: corsOptions,
+  cors: {
+    origin: process.env.FRONTEND_URL || [
+      "https://vocal-echo-social-frontend.vercel.app",
+      "http://localhost:3000",
+    ],
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
   transports: ["websocket", "polling"],
 });
 
