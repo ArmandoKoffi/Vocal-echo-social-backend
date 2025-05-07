@@ -88,14 +88,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// Serve static files in production
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "../client/build")));
-
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "../client/build", "index.html"));
-  });
-}
 
 // Gestion des erreurs
 app.use((err, req, res, next) => {
