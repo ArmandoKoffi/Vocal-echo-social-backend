@@ -151,7 +151,7 @@ router.post('/', protect, uploadPostAudio.single('audio'), async (req, res) => {
 // @access  Private
 router.post("/:id/like", protect, async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id);
+    const post = await Post.findById(req.params.id).populate('userId', 'username');
 
     if (!post) {
       return res.status(404).json({
@@ -160,21 +160,49 @@ router.post("/:id/like", protect, async (req, res) => {
       });
     }
 
-    const userId = req.user._id; // Utilisation de _id au lieu de id
-    const alreadyLiked = post.likes.some(
-      (like) => like.equals(userId) // Utilisation de .equals() pour ObjectId
-    );
+    const userId = req.user._id;
+    const alreadyLiked = post.likes.some((like) => like.equals(userId));
 
-    // Mise à jour des likes
     if (alreadyLiked) {
-      post.likes.pull(userId); // Méthode Mongoose pour retirer
+      post.likes.pull(userId);
     } else {
       post.likes.push(userId);
+      
+      // Créer une notification si ce n'est pas l'auteur qui like son propre post
+      if (!post.userId._id.equals(userId)) {
+        const notification = new Notification({
+          user: post.userId._id,
+          fromUser: userId,
+          type: "like",
+          message: "a aimé votre publication",
+          post: post._id,
+          read: false,
+        });
+        
+        await notification.save();
+        
+        // Envoyer une notification en temps réel
+        const io = req.app.get('io');
+        if (io) {
+          io.to(post.userId._id.toString()).emit('notification', {
+            id: notification._id,
+            type: notification.type,
+            message: notification.message,
+            timestamp: notification.createdAt,
+            read: notification.read,
+            fromUser: {
+              id: req.user._id,
+              username: req.user.username,
+              avatar: req.user.avatar,
+            },
+            postId: post._id.toString()
+          });
+        }
+      }
     }
 
     await post.save();
 
-    // Réponse formatée
     res.status(200).json({
       success: true,
       data: {
@@ -201,7 +229,7 @@ router.post(
   uploadCommentAudio.single("audio"),
   async (req, res) => {
     try {
-      const post = await Post.findById(req.params.id);
+      const post = await Post.findById(req.params.id).populate('userId', 'username');
       if (!post)
         return res
           .status(404)
@@ -226,6 +254,39 @@ router.post(
 
       post.comments.push(newComment);
       await post.save();
+
+      // Créer une notification si ce n'est pas l'auteur qui commente son propre post
+      if (!post.userId._id.equals(user._id)) {
+        const notification = new Notification({
+          user: post.userId._id,
+          fromUser: user._id,
+          type: "comment",
+          message: "a commenté votre publication",
+          post: post._id,
+          comment: newComment._id,
+          read: false,
+        });
+        
+        await notification.save();
+        
+        // Envoyer une notification en temps réel
+        const io = req.app.get('io');
+        if (io) {
+          io.to(post.userId._id.toString()).emit('notification', {
+            id: notification._id,
+            type: notification.type,
+            message: notification.message,
+            timestamp: notification.createdAt,
+            read: notification.read,
+            fromUser: {
+              id: user._id,
+              username: user.username,
+              avatar: user.avatar,
+            },
+            postId: post._id.toString()
+          });
+        }
+      }
 
       res.status(201).json({
         success: true,
