@@ -32,7 +32,10 @@ const commentStorage = new CloudinaryStorage({
   }
 });
 
-const uploadPostAudio = multer({ storage: postStorage });
+const uploadPostAudio = multer({
+  storage: postStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
 const uploadCommentAudio = multer({ storage: commentStorage });
 
 // @route   GET /api/posts
@@ -338,5 +341,88 @@ router.delete("/:id", protect, async (req, res) => {
     res.status(500).json({ success: false, message: "Erreur suppression" });
   }
 });
+
+// @route   PUT /api/posts/:id
+// @desc    Modifier un post
+// @access  Private
+router.put(
+  "/:id",
+  protect,
+  uploadPostAudio.single("audio"),
+  async (req, res) => {
+    try {
+      console.log("Tentative de modification du post:", req.params.id);
+
+      const post = await Post.findById(req.params.id);
+      if (!post) {
+        console.log("Post non trouvé");
+        return res.status(404).json({
+          success: false,
+          message: "Post non trouvé",
+        });
+      }
+
+      // Vérification de l'auteur
+      if (post.userId.toString() !== req.user.id) {
+        console.log("Tentative de modification non autorisée");
+        return res.status(403).json({
+          success: false,
+          message: "Non autorisé à modifier ce post",
+        });
+      }
+
+      // Mise à jour de la description
+      if (req.body.description !== undefined) {
+        post.description = req.body.description;
+      }
+
+      // Mise à jour de l'audio si fourni
+      if (req.file) {
+        console.log("Nouveau fichier audio reçu");
+        // Suppression de l'ancien audio
+        if (post.audioUrl) {
+          const publicId = post.audioUrl
+            .split("/")
+            .slice(-2)
+            .join("/")
+            .split(".")[0];
+          await cloudinary.uploader.destroy(publicId, {
+            resource_type: "video",
+          });
+        }
+        post.audioUrl = req.file.path;
+        post.audioDuration = parseFloat(req.body.audioDuration) || 0;
+      }
+
+      await post.save();
+
+      console.log("Post mis à jour avec succès");
+      res.status(200).json({
+        success: true,
+        data: {
+          id: post._id,
+          userId: post.userId,
+          username: req.user.username,
+          avatar: req.user.avatar,
+          audioUrl: post.audioUrl,
+          audioDuration: post.audioDuration,
+          description: post.description,
+          timestamp: post.timestamp,
+          likes: post.likes.length,
+          comments: post.comments,
+          hasLiked: post.likes.some(
+            (like) => like.toString() === req.user.id.toString()
+          ),
+        },
+      });
+    } catch (err) {
+      console.error("Erreur lors de la modification du post:", err);
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la modification du post",
+      });
+    }
+  }
+);
 
 module.exports = router;

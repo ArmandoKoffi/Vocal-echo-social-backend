@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -8,15 +9,29 @@ const socketIo = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || [
+    "https://vocal-echo-social-frontend.vercel.app",
+    "http://localhost:3000",
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Middleware de logging pour le débogage
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 // Configuration Socket.io
 const io = socketIo(server, {
-  cors: {
-    origin:
-      process.env.FRONTEND_URL ||
-      "https://vocal-echo-social-frontend.vercel.app",
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
+  cors: corsOptions,
 });
 
 // Middleware global pour Socket.io
