@@ -15,6 +15,11 @@ const UserSchema = new mongoose.Schema({
     unique: true,
     trim: true,
   },
+  status: {
+    type: String,
+    enum: ["active", "warning", "banned"],
+    default: "active",
+  },
   email: {
     type: String,
     required: [true, "Veuillez fournir un email"],

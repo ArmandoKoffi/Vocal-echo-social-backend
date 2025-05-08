@@ -69,23 +69,30 @@ app.use("/api/healthcheck", healthcheckRoutes);
 io.on("connection", (socket) => {
   console.log(`⚡ Nouvelle connexion Socket.io: ${socket.id}`);
 
-  // Rejoindre une room spécifique à l'utilisateur
+  // Rejoindre la room des utilisateurs en ligne
   socket.on("join", (userId) => {
     if (userId) {
       socket.join(userId);
+      socket.join('onlineUsers'); // Room globale pour les utilisateurs en ligne
       console.log(`👤 Utilisateur ${userId} connecté à sa room`);
+      
+      // Mettre à jour la liste des utilisateurs en ligne
+      updateOnlineUsers();
     }
   });
 
   // Gestion des déconnexions
   socket.on("disconnect", () => {
     console.log(`🔌 Déconnexion Socket.io: ${socket.id}`);
+    updateOnlineUsers();
   });
 
-  // Gestion des erreurs
-  socket.on("error", (error) => {
-    console.error("Socket error:", error);
-  });
+  // Fonction pour mettre à jour la liste des utilisateurs en ligne
+  const updateOnlineUsers = () => {
+    const onlineUsersRoom = io.sockets.adapter.rooms.get('onlineUsers');
+    const onlineUserIds = onlineUsersRoom ? Array.from(onlineUsersRoom) : [];
+    io.emit('onlineUsers', onlineUserIds);
+  };
 });
 
 
