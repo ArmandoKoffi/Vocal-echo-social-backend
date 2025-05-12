@@ -5,6 +5,7 @@ const cors = require("cors");
 const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
+const reportsRoutes = require("./routes/reports");
 
 // Initialisation de l'application Express
 const app = express();
@@ -64,6 +65,7 @@ app.use("/api/notifications", notificationsRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/healthcheck", healthcheckRoutes);
+app.use("/api/reports", reportsRoutes);
 
 // Gestion des connexions Socket.io
 io.on("connection", (socket) => {
