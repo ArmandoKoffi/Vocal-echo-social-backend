@@ -32,6 +32,14 @@ exports.protect = async (req, res, next) => {
     // Ajouter l'utilisateur à la requête
     req.user = await User.findById(decoded.id);
 
+    // Vérifier si l'utilisateur est banni
+    if (req.user.status === "banned") {
+      return res.status(401).json({
+        success: false,
+        message: "Votre compte a été suspendu par les administrateurs",
+      });
+    }
+
     next();
   } catch (error) {
     return res.status(401).json({

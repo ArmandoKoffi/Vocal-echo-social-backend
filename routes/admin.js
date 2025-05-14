@@ -99,7 +99,7 @@ router.get("/user-reports/:userId", protect, isAdmin, async (req, res) => {
 // @access  Private
 router.get("/reports", protect, isAdmin, async (req, res) => {
   try {
-    const reports = await Report.find()
+    const reports = await Report.find({ status: "pending" }) // Seuls les non traités
       .populate("reportedBy", "username avatar")
       .populate("post", "audioUrl description userId")
       .sort({ createdAt: -1 });
@@ -239,6 +239,42 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
     }
 
     const previousStatus = report.status;
+    
+    // Traitement pour "ignoré"
+    if (status === "dismissed") {
+      await Report.findByIdAndUpdate(req.params.id, { 
+        status: "dismissed",
+        resolvedAt: Date.now(),
+        resolvedBy: req.user.id
+      });
+    } 
+    // Traitement pour "résolu"
+    else if (status === "resolved") {
+      // Supprimer le post signalé
+      await Post.findByIdAndDelete(report.post?._id);
+      
+      // Notifier l'auteur du post
+      if (report.post?.userId) {
+        const notification = await Notification.create({
+          type: "post_removed",
+          message: "Votre publication a été supprimée suite à un signalement",
+          user: report.post.userId,
+          fromUser: req.user.id,
+          read: false
+        });
+
+        const io = req.app.get("io");
+        io.to(report.post.userId.toString()).emit("notification", {
+          ...notification.toObject(),
+          fromUser: { 
+            username: req.user.username, 
+            avatar: req.user.avatar 
+          }
+        });
+      }
+    }
+
+    // Mettre à jour le statut du rapport
     report.status = status;
     
     if (status !== "pending") {
@@ -248,31 +284,24 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
 
     await report.save();
 
-    // Envoyer une notification si le statut a changé
-    if (previousStatus !== status) {
+    // Envoyer une notification à l'utilisateur qui a signalé
+    if (report.reportedBy && previousStatus !== status) {
       const io = req.app.get("io");
-      
-      // Notification à l'utilisateur qui a signalé
-      if (report.reportedBy) {
-        io.to(report.reportedBy._id.toString()).emit("notification", {
-          type: "report",
-          message: `Votre signalement a été ${status === "resolved" ? "résolu" : "ignoré"}`,
-          createdAt: new Date(),
-        });
-      }
+      const notification = await Notification.create({
+        type: "report_update",
+        message: `Votre signalement a été ${status === "resolved" ? "résolu" : "ignoré"}`,
+        user: report.reportedBy._id,
+        fromUser: req.user.id,
+        read: false
+      });
 
-      // Si résolu, notifier l'auteur du post et supprimer le contenu si nécessaire
-      if (status === "resolved" && report.post) {
-        // Supprimer le post signalé
-        await Post.findByIdAndDelete(report.post._id);
-        
-        // Notifier l'auteur du post
-        io.to(report.post.userId.toString()).emit("notification", {
-          type: "report",
-          message: "Votre publication a été supprimée suite à un signalement",
-          createdAt: new Date(),
-        });
-      }
+      io.to(report.reportedBy._id.toString()).emit("notification", {
+        ...notification.toObject(),
+        fromUser: {
+          username: req.user.username,
+          avatar: req.user.avatar
+        }
+      });
     }
 
     res.json({
@@ -348,22 +377,39 @@ router.put("/users/:id/status", protect, isAdmin, async (req, res) => {
 
     // Envoyer une notification à l'utilisateur
     if (status === "warning") {
-      io.to(user._id.toString()).emit("notification", {
+      // Créer la notification en base
+      const notification = await Notification.create({
         type: "warning",
-        message: "Vous avez reçu un avertissement de la part des administrateurs",
-        createdAt: new Date(),
-      });
-    } else if (status === "banned") {
-      // Supprimer tous les posts de l'utilisateur
-      await Post.deleteMany({ userId: user._id });
-      
-      // Envoyer une notification
-      io.to(user._id.toString()).emit("notification", {
-        type: "ban",
-        message: "Votre compte a été banni par les administrateurs",
-        createdAt: new Date(),
+        message:
+          "Vous avez reçu un avertissement de la part des administrateurs",
+        user: user._id,
+        fromUser: req.user.id, // Admin
+        read: false,
       });
 
+      // Émettre via Socket.io
+      io.to(user._id.toString()).emit("notification", {
+        ...notification.toObject(),
+        fromUser: { username: req.user.username, avatar: req.user.avatar },
+      });
+    } else if (status === "banned") {
+      // Créer la notification en base
+      const notification = await Notification.create({
+        type: "ban",
+        message: "Votre compte a été banni par les administrateurs",
+        user: user._id,
+        fromUser: req.user.id,
+        read: false,
+      });
+
+      // Émettre via Socket.io
+      io.to(user._id.toString()).emit("notification", {
+        ...notification.toObject(),
+        fromUser: { username: req.user.username, avatar: req.user.avatar },
+      });
+
+      // Supprimer tous les posts de l'utilisateur
+      await Post.deleteMany({ userId: user._id });
       // Déconnecter l'utilisateur
       io.to(user._id.toString()).emit("forceLogout");
     }
