@@ -71,11 +71,12 @@ app.use("/api/reports", reportsRoutes);
 io.on("connection", (socket) => {
   console.log(`⚡ Nouvelle connexion Socket.io: ${socket.id}`);
 
-  // Rejoindre la room des utilisateurs en ligne
+  // Stocker l'ID utilisateur quand il se connecte
   socket.on("join", (userId) => {
     if (userId) {
+      socket.userId = userId; // Associer l'ID utilisateur à la socket
       socket.join(userId);
-      socket.join('onlineUsers'); // Room globale pour les utilisateurs en ligne
+      socket.join('onlineUsers');
       console.log(`👤 Utilisateur ${userId} connecté à sa room`);
       
       // Mettre à jour la liste des utilisateurs en ligne
@@ -91,9 +92,12 @@ io.on("connection", (socket) => {
 
   // Fonction pour mettre à jour la liste des utilisateurs en ligne
   const updateOnlineUsers = () => {
-    const onlineUsersRoom = io.sockets.adapter.rooms.get('onlineUsers');
-    const onlineUserIds = onlineUsersRoom ? Array.from(onlineUsersRoom) : [];
-    io.emit('onlineUsers', onlineUserIds);
+    const sockets = Array.from(io.sockets.sockets.values());
+    const onlineUserIds = sockets
+      .filter(s => s.userId)
+      .map(s => s.userId);
+    
+    io.emit('onlineUsers', [...new Set(onlineUserIds)]);
   };
 });
 
