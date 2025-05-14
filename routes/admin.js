@@ -21,7 +21,7 @@ router.get("/users", protect, isAdmin, async (req, res) => {
       users.map(async (user) => {
         const postCount = await Post.countDocuments({ userId: user._id });
         const reportCount = await Report.countDocuments({
-          reportedUser: user._id,
+          reportedBy: user._id,
         });
 
         return {
@@ -57,7 +57,7 @@ router.get("/users", protect, isAdmin, async (req, res) => {
 // @access  Private
 router.get("/user-reports/:userId", protect, isAdmin, async (req, res) => {
   try {
-    const reports = await Report.find({ reportedUser: req.params.userId })
+    const reports = await Report.find({ reportedBy: req.params.userId })
       .populate("reportedBy", "username avatar")
       .populate("post", "audioUrl description")
       .sort({ createdAt: -1 });
@@ -100,30 +100,44 @@ router.get("/user-reports/:userId", protect, isAdmin, async (req, res) => {
 router.get("/reports", protect, isAdmin, async (req, res) => {
   try {
     const reports = await Report.find()
-      .populate("reportedUser", "username avatar")
-      .populate("reportedBy", "username")
-      .populate("post", "audio")
+      .populate("reportedBy", "username avatar")
+      .populate("post", "audioUrl description userId")
       .sort({ createdAt: -1 });
 
-    const formattedReports = reports.map((report) => ({
-      id: report._id,
-      postId: report.post?._id || "",
-      postAuthor: report.reportedUser?.username || "Utilisateur supprimé",
-      postAuthorAvatar: report.reportedUser?.avatar || "",
-      reportedBy: report.reportedBy?.username || "Utilisateur supprimé",
-      reason: report.reason,
-      status: report.status,
-      createdAt: report.createdAt,
-      audioUrl: report.post?.audio || "",
-      details: report.details,
-    }));
+    const formattedReports = await Promise.all(
+      reports.map(async (report) => {
+        // Récupérer les informations sur l'auteur du post si disponible
+        let postAuthor = { username: "Utilisateur supprimé", avatar: "" };
+        if (report.post && report.post.userId) {
+          const user = await User.findById(report.post.userId).select(
+            "username avatar"
+          );
+          if (user) {
+            postAuthor = { username: user.username, avatar: user.avatar };
+          }
+        }
+
+        return {
+          id: report._id,
+          postId: report.post?._id || "",
+          postAuthor: postAuthor.username,
+          postAuthorAvatar: postAuthor.avatar,
+          reportedBy: report.reportedBy?.username || "Utilisateur supprimé",
+          reason: report.reason,
+          status: report.status,
+          createdAt: report.createdAt,
+          audioUrl: report.post?.audioUrl || "",
+          details: report.details,
+        };
+      })
+    );
 
     res.json({
       success: true,
       data: formattedReports,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur lors de la récupération des rapports:", error);
     res.status(500).json({
       success: false,
       message: "Erreur serveur",
@@ -257,7 +271,7 @@ router.delete("/reports/:id", protect, isAdmin, async (req, res) => {
       });
     }
 
-    await report.remove();
+    await report.deleteOne();
 
     res.json({
       success: true,
@@ -362,4 +376,3 @@ router.put("/users/:id/role", protect, isAdmin, async (req, res) => {
 });
 
 module.exports = router;
-
