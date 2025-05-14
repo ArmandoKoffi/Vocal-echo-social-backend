@@ -4,6 +4,7 @@ const { protect, isAdmin } = require("../middleware/auth");
 const User = require("../models/User");
 const Post = require("../models/Post");
 const Report = require("../models/Report");
+const Notification = require("../models/Notification");
 
 // @route   GET /api/admin/users
 // @desc    Get all users with stats (admin only)
@@ -239,20 +240,20 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
     }
 
     const previousStatus = report.status;
-    
+
     // Traitement pour "ignoré"
     if (status === "dismissed") {
-      await Report.findByIdAndUpdate(req.params.id, { 
+      await Report.findByIdAndUpdate(req.params.id, {
         status: "dismissed",
         resolvedAt: Date.now(),
-        resolvedBy: req.user.id
+        resolvedBy: req.user.id,
       });
-    } 
+    }
     // Traitement pour "résolu"
     else if (status === "resolved") {
       // Supprimer le post signalé
       await Post.findByIdAndDelete(report.post?._id);
-      
+
       // Notifier l'auteur du post
       if (report.post?.userId) {
         const notification = await Notification.create({
@@ -260,23 +261,23 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
           message: "Votre publication a été supprimée suite à un signalement",
           user: report.post.userId,
           fromUser: req.user.id,
-          read: false
+          read: false,
         });
 
         const io = req.app.get("io");
         io.to(report.post.userId.toString()).emit("notification", {
           ...notification.toObject(),
-          fromUser: { 
-            username: req.user.username, 
-            avatar: req.user.avatar 
-          }
+          fromUser: {
+            username: req.user.username,
+            avatar: req.user.avatar,
+          },
         });
       }
     }
 
     // Mettre à jour le statut du rapport
     report.status = status;
-    
+
     if (status !== "pending") {
       report.resolvedAt = Date.now();
       report.resolvedBy = req.user.id;
@@ -289,18 +290,20 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
       const io = req.app.get("io");
       const notification = await Notification.create({
         type: "report_update",
-        message: `Votre signalement a été ${status === "resolved" ? "résolu" : "ignoré"}`,
+        message: `Votre signalement a été ${
+          status === "resolved" ? "résolu" : "ignoré"
+        }`,
         user: report.reportedBy._id,
         fromUser: req.user.id,
-        read: false
+        read: false,
       });
 
       io.to(report.reportedBy._id.toString()).emit("notification", {
         ...notification.toObject(),
         fromUser: {
           username: req.user.username,
-          avatar: req.user.avatar
-        }
+          avatar: req.user.avatar,
+        },
       });
     }
 

@@ -76,9 +76,9 @@ io.on("connection", (socket) => {
     if (userId) {
       socket.userId = userId; // Associer l'ID utilisateur à la socket
       socket.join(userId);
-      socket.join('onlineUsers');
+      socket.join("onlineUsers");
       console.log(`👤 Utilisateur ${userId} connecté à sa room`);
-      
+
       // Mettre à jour la liste des utilisateurs en ligne
       updateOnlineUsers();
     }
@@ -93,14 +93,11 @@ io.on("connection", (socket) => {
   // Fonction pour mettre à jour la liste des utilisateurs en ligne
   const updateOnlineUsers = () => {
     const sockets = Array.from(io.sockets.sockets.values());
-    const onlineUserIds = sockets
-      .filter(s => s.userId)
-      .map(s => s.userId);
-    
-    io.emit('onlineUsers', [...new Set(onlineUserIds)]);
+    const onlineUserIds = sockets.filter((s) => s.userId).map((s) => s.userId);
+
+    io.emit("onlineUsers", [...new Set(onlineUserIds)]);
   };
 });
-
 
 // Gestion des erreurs
 app.use((err, req, res, next) => {
@@ -129,7 +126,7 @@ mongoose
       console.log(`🌍 Environnement: ${process.env.NODE_ENV || "development"}`);
       console.log(`🔗 Frontend URL: ${process.env.FRONTEND_URL}`);
       console.log(`☁️  Cloudinary Cloud: ${process.env.CLOUDINARY_CLOUD_NAME}`);
-      
+
       // Vérification des variables d'environnement critiques
       if (!process.env.JWT_SECRET) {
         console.warn("⚠️ Avertissement: JWT_SECRET non défini");
