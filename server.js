@@ -40,12 +40,20 @@ const io = socketIo(server, {
   transports: ["websocket", "polling"],
 });
 
+// Stockage en mémoire pour les utilisateurs connectés et les sessions admin
+const connectedUsers = new Map(); // userId -> socketId
+const adminSockets = new Set(); // ensemble des socketId des administrateurs
+
 // Rendre l'objet io accessible dans les routes
 app.set("io", io);
+app.set("connectedUsers", connectedUsers);
+app.set("adminSockets", adminSockets);
 
 // Middleware pour ajouter io à toutes les requêtes
 app.use((req, res, next) => {
   req.io = io;
+  req.connectedUsers = connectedUsers;
+  req.adminSockets = adminSockets;
   next();
 });
 
@@ -72,36 +80,81 @@ io.on("connection", (socket) => {
   console.log(`⚡ Nouvelle connexion Socket.io: ${socket.id}`);
 
   // Stocker l'ID utilisateur quand il se connecte
-  socket.on("join", (userId) => {
+  socket.on("join", (userData) => {
+    if (!userData) return;
+
+    const userId = typeof userData === "object" ? userData.userId : userData;
+    const isAdmin = typeof userData === "object" ? userData.isAdmin : false;
+
     if (userId) {
+      // Garder trace des socketId pour chaque utilisateur
+      connectedUsers.set(userId, socket.id);
       socket.userId = userId; // Associer l'ID utilisateur à la socket
-      socket.join(userId);
-      socket.join("onlineUsers");
+      socket.join(userId); // Room personnelle
+      socket.join("allUsers"); // Room globale pour tous les utilisateurs
       console.log(`👤 Utilisateur ${userId} connecté à sa room`);
+
+      // Rejoindre la room des administrateurs si nécessaire
+      if (isAdmin) {
+        socket.join("adminRoom");
+        adminSockets.add(socket.id);
+        console.log(`👑 Administrateur ${userId} connecté`);
+      }
 
       // Mettre à jour la liste des utilisateurs en ligne
       updateOnlineUsers();
     }
   });
 
+  // Gestion du suivi des pages administrateur
+  socket.on("joinAdminDashboard", () => {
+    if (socket.userId) {
+      socket.join("adminDashboard");
+      console.log(`👑 Admin ${socket.userId} rejoint le dashboard admin`);
+    }
+  });
+
+  // L'utilisateur quitte le dashboard admin
+  socket.on("leaveAdminDashboard", () => {
+    socket.leave("adminDashboard");
+    console.log(`👑 Admin quitte le dashboard admin`);
+  });
+
   // Gestion des déconnexions
   socket.on("disconnect", () => {
     console.log(`🔌 Déconnexion Socket.io: ${socket.id}`);
+
+    if (socket.userId) {
+      connectedUsers.delete(socket.userId);
+    }
+
+    adminSockets.delete(socket.id);
+
     updateOnlineUsers();
   });
 
   // Fonction pour mettre à jour la liste des utilisateurs en ligne
   const updateOnlineUsers = () => {
-    const sockets = Array.from(io.sockets.sockets.values());
-    const onlineUserIds = sockets.filter((s) => s.userId).map((s) => s.userId);
+    const onlineUserIds = Array.from(connectedUsers.keys());
 
-    io.emit("onlineUsers", [...new Set(onlineUserIds)]);
+    // Émission à tous les utilisateurs connectés
+    io.emit("onlineUsers", onlineUserIds);
+
+    // Émission spécifique aux admins pour le tableau de bord
+    io.to("adminDashboard").emit("onlineUsersCount", onlineUserIds.length);
   };
 });
 
+// Module exports pour utilisation dans d'autres fichiers si nécessaire
+module.exports = {
+  io,
+  app,
+  server,
+};
+
 // Gestion des erreurs
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("Erreur interceptée:", err.stack);
   res.status(500).json({
     success: false,
     message:
@@ -157,3 +210,4 @@ process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
   process.exit(1);
 });
+

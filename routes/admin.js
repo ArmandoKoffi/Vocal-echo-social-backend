@@ -5,6 +5,7 @@ const User = require("../models/User");
 const Post = require("../models/Post");
 const Report = require("../models/Report");
 const Notification = require("../models/Notification");
+const mongoose = require("mongoose");
 
 // @route   GET /api/admin/users
 // @desc    Get all users with stats (admin only)
@@ -13,10 +14,8 @@ router.get("/users", protect, isAdmin, async (req, res) => {
   try {
     const users = await User.find().select("-password").lean();
 
-    // Get online users from Socket.io
-    const io = req.app.get("io");
-    const onlineUsers =
-      io?.sockets?.adapter?.rooms?.get("onlineUsers") || new Set();
+    // Récupérer les utilisateurs en ligne depuis le stockage Socket.io
+    const connectedUsers = req.connectedUsers || new Map();
 
     const userStats = await Promise.all(
       users.map(async (user) => {
@@ -35,7 +34,7 @@ router.get("/users", protect, isAdmin, async (req, res) => {
           reportCount,
           joinedAt: user.createdAt,
           isAdmin: user.isAdmin,
-          isOnline: onlineUsers.has(user._id.toString()),
+          isOnline: connectedUsers.has(user._id.toString()),
         };
       })
     );
@@ -45,10 +44,11 @@ router.get("/users", protect, isAdmin, async (req, res) => {
       data: userStats,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans /api/admin/users:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la récupération des utilisateurs",
+      error: error.message,
     });
   }
 });
@@ -87,10 +87,11 @@ router.get("/user-reports/:userId", protect, isAdmin, async (req, res) => {
       data: formattedReports,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans /api/admin/user-reports/:userId:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la récupération des signalements",
+      error: error.message,
     });
   }
 });
@@ -142,6 +143,7 @@ router.get("/reports", protect, isAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Erreur serveur",
+      error: error.message,
     });
   }
 });
@@ -161,10 +163,9 @@ router.get("/stats", protect, isAdmin, async (req, res) => {
       status: "dismissed",
     });
 
-    // Get online users count from Socket.io
-    const io = req.app.get("io");
-    const onlineUsers =
-      io?.sockets?.adapter?.rooms?.get("onlineUsers")?.size || 0;
+    // Récupérer le nombre d'utilisateurs en ligne
+    const connectedUsers = req.connectedUsers || new Map();
+    const onlineUsers = connectedUsers.size;
 
     // Calculate average response time
     const resolvedReportsData = await Report.find({
@@ -191,25 +192,31 @@ router.get("/stats", protect, isAdmin, async (req, res) => {
       1
     );
 
+    const stats = {
+      totalUsers,
+      activeUsers,
+      totalPosts,
+      totalReports,
+      pendingReports,
+      resolvedReports,
+      dismissedReports,
+      averageResponseTime: `${avgResponseTimeHours} heures`,
+      onlineUsers,
+    };
+
     res.json({
       success: true,
-      data: {
-        totalUsers,
-        activeUsers,
-        totalPosts,
-        totalReports,
-        pendingReports,
-        resolvedReports,
-        dismissedReports,
-        averageResponseTime: `${avgResponseTimeHours} heures`,
-        onlineUsers,
-      },
+      data: stats,
     });
+
+    // Émettre ces statistiques à tous les administrateurs connectés sur le dashboard
+    req.io.to("adminDashboard").emit("adminStats", stats);
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans /api/admin/stats:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la récupération des statistiques",
+      error: error.message,
     });
   }
 });
@@ -243,42 +250,47 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
 
     // Traitement pour "ignoré"
     if (status === "dismissed") {
-      await Report.findByIdAndUpdate(req.params.id, {
-        status: "dismissed",
-        resolvedAt: Date.now(),
-        resolvedBy: req.user.id,
-      });
+      report.status = "dismissed";
+      report.resolvedAt = Date.now();
+      report.resolvedBy = req.user.id;
     }
     // Traitement pour "résolu"
     else if (status === "resolved") {
-      // Supprimer le post signalé
-      await Post.findByIdAndDelete(report.post?._id);
+      // Supprimer le post signalé si existant
+      if (report.post) {
+        await Post.findByIdAndDelete(report.post._id);
 
-      // Notifier l'auteur du post
-      if (report.post?.userId) {
-        const notification = await Notification.create({
-          type: "post_removed",
-          message: "Votre publication a été supprimée suite à un signalement",
-          user: report.post.userId,
-          fromUser: req.user.id,
-          read: false,
-        });
+        // Notifier l'auteur du post s'il existe
+        if (report.post.userId) {
+          const notification = new Notification({
+            type: "post_removed",
+            message: "Votre publication a été supprimée suite à un signalement",
+            user: report.post.userId,
+            fromUser: req.user.id,
+            read: false,
+          });
 
-        const io = req.app.get("io");
-        io.to(report.post.userId.toString()).emit("notification", {
-          ...notification.toObject(),
-          fromUser: {
-            username: req.user.username,
-            avatar: req.user.avatar,
-          },
-        });
+          await notification.save();
+
+          // Envoyer une notification en temps réel
+          const io = req.io;
+          const targetSocketId = req.connectedUsers.get(
+            report.post.userId.toString()
+          );
+
+          if (targetSocketId) {
+            io.to(targetSocketId).emit("notification", {
+              ...notification.toObject(),
+              fromUser: {
+                username: req.user.username,
+                avatar: req.user.avatar,
+              },
+            });
+          }
+        }
       }
-    }
 
-    // Mettre à jour le statut du rapport
-    report.status = status;
-
-    if (status !== "pending") {
+      report.status = "resolved";
       report.resolvedAt = Date.now();
       report.resolvedBy = req.user.id;
     }
@@ -287,8 +299,7 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
 
     // Envoyer une notification à l'utilisateur qui a signalé
     if (report.reportedBy && previousStatus !== status) {
-      const io = req.app.get("io");
-      const notification = await Notification.create({
+      const notification = new Notification({
         type: "report_update",
         message: `Votre signalement a été ${
           status === "resolved" ? "résolu" : "ignoré"
@@ -298,24 +309,49 @@ router.put("/reports/:id", protect, isAdmin, async (req, res) => {
         read: false,
       });
 
-      io.to(report.reportedBy._id.toString()).emit("notification", {
-        ...notification.toObject(),
-        fromUser: {
-          username: req.user.username,
-          avatar: req.user.avatar,
-        },
-      });
+      await notification.save();
+
+      const targetSocketId = req.connectedUsers.get(
+        report.reportedBy._id.toString()
+      );
+      if (targetSocketId) {
+        req.io.to(targetSocketId).emit("notification", {
+          ...notification.toObject(),
+          fromUser: {
+            username: req.user.username,
+            avatar: req.user.avatar,
+          },
+        });
+      }
     }
+
+    // Mettre à jour les statistiques en temps réel pour tous les admins
+    const updatedStats = {
+      pendingReports: await Report.countDocuments({ status: "pending" }),
+      resolvedReports: await Report.countDocuments({ status: "resolved" }),
+      dismissedReports: await Report.countDocuments({ status: "dismissed" }),
+    };
+
+    req.io.to("adminDashboard").emit("reportStatsUpdate", updatedStats);
+
+    // Envoyer la mise à jour du rapport à tous les administrateurs
+    req.io.to("adminDashboard").emit("reportStatusChanged", {
+      id: report._id,
+      status: report.status,
+      resolvedBy: req.user.username,
+      resolvedAt: report.resolvedAt,
+    });
 
     res.json({
       success: true,
       data: report,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans PUT /api/admin/reports/:id:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la mise à jour du rapport",
+      error: error.message,
     });
   }
 });
@@ -336,15 +372,31 @@ router.delete("/reports/:id", protect, isAdmin, async (req, res) => {
 
     await report.deleteOne();
 
+    // Notifier les administrateurs de la suppression
+    req.io.to("adminDashboard").emit("reportDeleted", {
+      id: req.params.id,
+    });
+
+    // Mettre à jour les statistiques en temps réel
+    const updatedStats = {
+      totalReports: await Report.countDocuments(),
+      pendingReports: await Report.countDocuments({ status: "pending" }),
+      resolvedReports: await Report.countDocuments({ status: "resolved" }),
+      dismissedReports: await Report.countDocuments({ status: "dismissed" }),
+    };
+
+    req.io.to("adminDashboard").emit("reportStatsUpdate", updatedStats);
+
     res.json({
       success: true,
       message: "Signalement supprimé",
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans DELETE /api/admin/reports/:id:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la suppression du rapport",
+      error: error.message,
     });
   }
 });
@@ -376,12 +428,13 @@ router.put("/users/:id/status", protect, isAdmin, async (req, res) => {
     user.status = status;
     await user.save();
 
-    const io = req.app.get("io");
+    const io = req.io;
+    const targetSocketId = req.connectedUsers.get(user._id.toString());
 
     // Envoyer une notification à l'utilisateur
     if (status === "warning") {
       // Créer la notification en base
-      const notification = await Notification.create({
+      const notification = new Notification({
         type: "warning",
         message:
           "Vous avez reçu un avertissement de la part des administrateurs",
@@ -390,14 +443,18 @@ router.put("/users/:id/status", protect, isAdmin, async (req, res) => {
         read: false,
       });
 
+      await notification.save();
+
       // Émettre via Socket.io
-      io.to(user._id.toString()).emit("notification", {
-        ...notification.toObject(),
-        fromUser: { username: req.user.username, avatar: req.user.avatar },
-      });
+      if (targetSocketId) {
+        io.to(targetSocketId).emit("notification", {
+          ...notification.toObject(),
+          fromUser: { username: req.user.username, avatar: req.user.avatar },
+        });
+      }
     } else if (status === "banned") {
       // Créer la notification en base
-      const notification = await Notification.create({
+      const notification = new Notification({
         type: "ban",
         message: "Votre compte a été banni par les administrateurs",
         user: user._id,
@@ -405,27 +462,45 @@ router.put("/users/:id/status", protect, isAdmin, async (req, res) => {
         read: false,
       });
 
+      await notification.save();
+
       // Émettre via Socket.io
-      io.to(user._id.toString()).emit("notification", {
-        ...notification.toObject(),
-        fromUser: { username: req.user.username, avatar: req.user.avatar },
-      });
+      if (targetSocketId) {
+        io.to(targetSocketId).emit("notification", {
+          ...notification.toObject(),
+          fromUser: { username: req.user.username, avatar: req.user.avatar },
+        });
+
+        // Déconnecter l'utilisateur
+        io.to(targetSocketId).emit("forceLogout");
+      }
 
       // Supprimer tous les posts de l'utilisateur
       await Post.deleteMany({ userId: user._id });
-      // Déconnecter l'utilisateur
-      io.to(user._id.toString()).emit("forceLogout");
+
+      // Mettre à jour les statistiques de posts en temps réel
+      const totalPosts = await Post.countDocuments();
+      io.to("adminDashboard").emit("postStatsUpdate", { totalPosts });
     }
+
+    // Informer tous les administrateurs du changement de statut
+    io.to("adminDashboard").emit("userStatusChanged", {
+      userId: user._id.toString(),
+      previousStatus,
+      newStatus: status,
+      changedBy: req.user.username,
+    });
 
     res.json({
       success: true,
       message: "Statut mis à jour",
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans PUT /api/admin/users/:id/status:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la mise à jour du statut utilisateur",
+      error: error.message,
     });
   }
 });
@@ -464,18 +539,29 @@ router.put("/users/:id/role", protect, isAdmin, async (req, res) => {
       }
     }
 
+    const previousRole = user.isAdmin;
     user.isAdmin = isAdmin;
     await user.save();
+
+    // Notifier tous les administrateurs du changement de rôle
+    req.io.to("adminDashboard").emit("userRoleChanged", {
+      userId: user._id.toString(),
+      username: user.username,
+      previousRole: previousRole ? "Admin" : "Utilisateur",
+      newRole: isAdmin ? "Admin" : "Utilisateur",
+      changedBy: req.user.username,
+    });
 
     res.json({
       success: true,
       message: "Rôle administrateur mis à jour",
     });
   } catch (error) {
-    console.error(error);
+    console.error("Erreur dans PUT /api/admin/users/:id/role:", error);
     res.status(500).json({
       success: false,
-      message: "Erreur serveur",
+      message: "Erreur serveur lors de la mise à jour du rôle",
+      error: error.message,
     });
   }
 });
