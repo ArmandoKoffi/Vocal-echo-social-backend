@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 const Post = require("../models/Post");
@@ -14,22 +13,22 @@ const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const postStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'audio-posts',
-    resource_type: 'auto',
-    allowed_formats: ['mp3', 'wav', 'ogg', 'm4a'],
-    format: 'mp3'
-  }
+    folder: "audio-posts",
+    resource_type: "auto",
+    allowed_formats: ["mp3", "wav", "ogg", "m4a"],
+    format: "mp3",
+  },
 });
 
 // Configuration Cloudinary pour les commentaires audio
 const commentStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'audio-comments',
-    resource_type: 'auto',
-    allowed_formats: ['mp3', 'wav', 'ogg', 'm4a'],
-    format: 'mp3'
-  }
+    folder: "audio-comments",
+    resource_type: "auto",
+    allowed_formats: ["mp3", "wav", "ogg", "m4a"],
+    format: "mp3",
+  },
 });
 
 const uploadPostAudio = multer({
@@ -38,61 +37,70 @@ const uploadPostAudio = multer({
 });
 const uploadCommentAudio = multer({ storage: commentStorage });
 
+// Helper function to format post for frontend
+const formatPostForFrontend = async (post, userId) => {
+  const hasLiked = post.likes.some(
+    (like) => like.toString() === userId.toString()
+  );
+
+  // Récupérer et formater les commentaires
+  const comments = await Promise.all(
+    post.comments.map(async (comment) => {
+      const commentUser = await User.findById(comment.userId);
+      return {
+        id: comment._id,
+        userId: comment.userId,
+        username: commentUser.username,
+        avatar: commentUser.avatar,
+        content: comment.content || "",
+        audioUrl: comment.audioUrl || null,
+        audioDuration: comment.audioDuration || null,
+        timestamp: comment.timestamp,
+      };
+    })
+  );
+
+  return {
+    id: post._id,
+    userId: post.userId._id || post.userId,
+    username: post.userId.username || post.username,
+    avatar: post.userId.avatar || post.avatar,
+    audioUrl: post.audioUrl,
+    audioDuration: post.audioDuration,
+    description: post.description || "",
+    timestamp: post.timestamp,
+    likes: post.likes.length,
+    comments: comments,
+    hasLiked: hasLiked,
+  };
+};
+
 // @route   GET /api/posts
 // @desc    Récupérer tous les posts
 // @access  Private
-router.get('/', protect, async (req, res) => {
+router.get("/", protect, async (req, res) => {
   try {
-    const posts = await Post.find()
-      .sort({ timestamp: -1 })
-      .populate({
-        path: 'userId',
-        select: 'username avatar'
-      });
+    const posts = await Post.find().sort({ timestamp: -1 }).populate({
+      path: "userId",
+      select: "username avatar",
+    });
 
     // Transformer les données pour qu'elles correspondent au format frontend
-    const formattedPosts = await Promise.all(posts.map(async (post) => {
-      const hasLiked = post.likes.some(like => like.toString() === req.user.id.toString());
-
-      // Récupérer et formater les commentaires
-      const comments = await Promise.all(post.comments.map(async (comment) => {
-        const commentUser = await User.findById(comment.userId);
-        return {
-          id: comment._id,
-          userId: comment.userId,
-          username: commentUser.username,
-          avatar: commentUser.avatar,
-          content: comment.content || '',
-          audioUrl: comment.audioUrl || null,
-          audioDuration: comment.audioDuration || null,
-          timestamp: comment.timestamp
-        };
-      }));
-
-      return {
-        id: post._id,
-        userId: post.userId._id,
-        username: post.userId.username,
-        avatar: post.userId.avatar,
-        audioUrl: post.audioUrl,
-        audioDuration: post.audioDuration,
-        description: post.description || '',
-        timestamp: post.timestamp,
-        likes: post.likes.length,
-        comments: comments,
-        hasLiked: hasLiked
-      };
-    }));
+    const formattedPosts = await Promise.all(
+      posts.map(async (post) => {
+        return await formatPostForFrontend(post, req.user.id);
+      })
+    );
 
     res.status(200).json({
       success: true,
-      data: formattedPosts
+      data: formattedPosts,
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération des posts'
+      message: "Erreur lors de la récupération des posts",
     });
   }
 });
@@ -100,14 +108,14 @@ router.get('/', protect, async (req, res) => {
 // @route   POST /api/posts
 // @desc    Créer un nouveau post vocal
 // @access  Private
-router.post('/', protect, uploadPostAudio.single('audio'), async (req, res) => {
+router.post("/", protect, uploadPostAudio.single("audio"), async (req, res) => {
   try {
     const { description, audioDuration } = req.body;
 
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Veuillez uploader un fichier audio valide'
+        message: "Veuillez uploader un fichier audio valide",
       });
     }
 
@@ -115,33 +123,41 @@ router.post('/', protect, uploadPostAudio.single('audio'), async (req, res) => {
       userId: req.user.id,
       audioUrl: req.file.path,
       audioDuration: parseFloat(audioDuration) || 0,
-      description: description || ''
+      description: description || "",
     });
 
     await User.findByIdAndUpdate(req.user.id, { $inc: { postsCount: 1 } });
     const user = await User.findById(req.user.id);
 
+    const formattedPost = {
+      id: post._id,
+      userId: req.user.id,
+      username: user.username,
+      avatar: user.avatar,
+      audioUrl: post.audioUrl,
+      audioDuration: post.audioDuration,
+      description: post.description,
+      timestamp: post.timestamp,
+      likes: 0,
+      comments: [],
+      hasLiked: false,
+    };
+
+    // Émission de l'événement en temps réel
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("post:created", formattedPost);
+    }
+
     res.status(201).json({
       success: true,
-      data: {
-        id: post._id,
-        userId: req.user.id,
-        username: user.username,
-        avatar: user.avatar,
-        audioUrl: post.audioUrl,
-        audioDuration: post.audioDuration,
-        description: post.description,
-        timestamp: post.timestamp,
-        likes: 0,
-        comments: [],
-        hasLiked: false
-      }
+      data: formattedPost,
     });
   } catch (err) {
-    console.error('Erreur création post:', err);
+    console.error("Erreur création post:", err);
     res.status(500).json({
       success: false,
-      message: 'Erreur création post'
+      message: "Erreur création post",
     });
   }
 });
@@ -151,7 +167,10 @@ router.post('/', protect, uploadPostAudio.single('audio'), async (req, res) => {
 // @access  Private
 router.post("/:id/like", protect, async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id).populate('userId', 'username');
+    const post = await Post.findById(req.params.id).populate(
+      "userId",
+      "username"
+    );
 
     if (!post) {
       return res.status(404).json({
@@ -167,7 +186,7 @@ router.post("/:id/like", protect, async (req, res) => {
       post.likes.pull(userId);
     } else {
       post.likes.push(userId);
-      
+
       // Créer une notification si ce n'est pas l'auteur qui like son propre post
       if (!post.userId._id.equals(userId)) {
         const notification = new Notification({
@@ -178,13 +197,13 @@ router.post("/:id/like", protect, async (req, res) => {
           post: post._id,
           read: false,
         });
-        
+
         await notification.save();
-        
+
         // Envoyer une notification en temps réel
-        const io = req.app.get('io');
+        const io = req.app.get("io");
         if (io) {
-          io.to(post.userId._id.toString()).emit('notification', {
+          io.to(post.userId._id.toString()).emit("notification", {
             id: notification._id,
             type: notification.type,
             message: notification.message,
@@ -195,7 +214,7 @@ router.post("/:id/like", protect, async (req, res) => {
               username: req.user.username,
               avatar: req.user.avatar,
             },
-            postId: post._id.toString()
+            postId: post._id.toString(),
           });
         }
       }
@@ -203,12 +222,24 @@ router.post("/:id/like", protect, async (req, res) => {
 
     await post.save();
 
+    const likeData = {
+      likes: post.likes.length,
+      hasLiked: !alreadyLiked,
+    };
+
+    // Émission de l'événement en temps réel pour les likes
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("post:liked", {
+        postId: post._id.toString(),
+        likes: post.likes.length,
+        userId: userId.toString(),
+      });
+    }
+
     res.status(200).json({
       success: true,
-      data: {
-        likes: post.likes.length,
-        hasLiked: !alreadyLiked,
-      },
+      data: likeData,
     });
   } catch (err) {
     console.error("Erreur serveur:", err);
@@ -229,7 +260,10 @@ router.post(
   uploadCommentAudio.single("audio"),
   async (req, res) => {
     try {
-      const post = await Post.findById(req.params.id).populate('userId', 'username');
+      const post = await Post.findById(req.params.id).populate(
+        "userId",
+        "username"
+      );
       if (!post)
         return res
           .status(404)
@@ -255,6 +289,12 @@ router.post(
       post.comments.push(newComment);
       await post.save();
 
+      // Formater le commentaire pour le frontend
+      const formattedComment = {
+        ...newComment,
+        id: newComment._id,
+      };
+
       // Créer une notification si ce n'est pas l'auteur qui commente son propre post
       if (!post.userId._id.equals(user._id)) {
         const notification = new Notification({
@@ -266,13 +306,13 @@ router.post(
           comment: newComment._id,
           read: false,
         });
-        
+
         await notification.save();
-        
+
         // Envoyer une notification en temps réel
-        const io = req.app.get('io');
+        const io = req.app.get("io");
         if (io) {
-          io.to(post.userId._id.toString()).emit('notification', {
+          io.to(post.userId._id.toString()).emit("notification", {
             id: notification._id,
             type: notification.type,
             message: notification.message,
@@ -283,17 +323,23 @@ router.post(
               username: user.username,
               avatar: user.avatar,
             },
-            postId: post._id.toString()
+            postId: post._id.toString(),
           });
         }
       }
 
+      // Émission de l'événement en temps réel pour les commentaires
+      const io = req.app.get("io");
+      if (io) {
+        io.emit("comment:created", {
+          postId: post._id.toString(),
+          comment: formattedComment,
+        });
+      }
+
       res.status(201).json({
         success: true,
-        data: {
-          ...newComment,
-          id: newComment._id,
-        },
+        data: formattedComment,
       });
     } catch (err) {
       console.error(err);
@@ -309,58 +355,31 @@ router.post(
 // @route   GET /api/posts/user/:userId
 // @desc    Récupérer les posts d'un utilisateur
 // @access  Private
-router.get('/user/:userId', protect, async (req, res) => {
+router.get("/user/:userId", protect, async (req, res) => {
   try {
     const posts = await Post.find({ userId: req.params.userId })
       .sort({ timestamp: -1 })
       .populate({
-        path: 'userId',
-        select: 'username avatar'
+        path: "userId",
+        select: "username avatar",
       });
 
     // Transformer les données pour qu'elles correspondent au format frontend
-    const formattedPosts = await Promise.all(posts.map(async (post) => {
-      const hasLiked = post.likes.some(like => like.toString() === req.user.id.toString());
-
-      // Récupérer et formater les commentaires
-      const comments = await Promise.all(post.comments.map(async (comment) => {
-        const commentUser = await User.findById(comment.userId);
-        return {
-          id: comment._id,
-          userId: comment.userId,
-          username: commentUser.username,
-          avatar: commentUser.avatar,
-          content: comment.content || '',
-          audioUrl: comment.audioUrl || null,
-          audioDuration: comment.audioDuration || null,
-          timestamp: comment.timestamp
-        };
-      }));
-
-      return {
-        id: post._id,
-        userId: post.userId._id,
-        username: post.userId.username,
-        avatar: post.userId.avatar,
-        audioUrl: post.audioUrl,
-        audioDuration: post.audioDuration,
-        description: post.description || '',
-        timestamp: post.timestamp,
-        likes: post.likes.length,
-        comments: comments,
-        hasLiked: hasLiked
-      };
-    }));
+    const formattedPosts = await Promise.all(
+      posts.map(async (post) => {
+        return await formatPostForFrontend(post, req.user.id);
+      })
+    );
 
     res.status(200).json({
       success: true,
-      data: formattedPosts
+      data: formattedPosts,
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la récupération des posts'
+      message: "Erreur lors de la récupération des posts",
     });
   }
 });
@@ -395,6 +414,12 @@ router.delete("/:id", protect, async (req, res) => {
     await Notification.deleteMany({ postId: post._id });
     await post.deleteOne();
     await User.findByIdAndUpdate(req.user.id, { $inc: { postsCount: -1 } });
+
+    // Émission de l'événement en temps réel
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("post:deleted", post._id.toString());
+    }
 
     res.status(200).json({ success: true, message: "Post supprimé" });
   } catch (err) {
@@ -457,24 +482,32 @@ router.put(
 
       await post.save();
 
+      const updatedPost = {
+        id: post._id,
+        userId: post.userId,
+        username: req.user.username,
+        avatar: req.user.avatar,
+        audioUrl: post.audioUrl,
+        audioDuration: post.audioDuration,
+        description: post.description,
+        timestamp: post.timestamp,
+        likes: post.likes.length,
+        comments: post.comments,
+        hasLiked: post.likes.some(
+          (like) => like.toString() === req.user.id.toString()
+        ),
+      };
+
+      // Émission de l'événement en temps réel
+      const io = req.app.get("io");
+      if (io) {
+        io.emit("post:updated", updatedPost);
+      }
+
       console.log("Post mis à jour avec succès");
       res.status(200).json({
         success: true,
-        data: {
-          id: post._id,
-          userId: post.userId,
-          username: req.user.username,
-          avatar: req.user.avatar,
-          audioUrl: post.audioUrl,
-          audioDuration: post.audioDuration,
-          description: post.description,
-          timestamp: post.timestamp,
-          likes: post.likes.length,
-          comments: post.comments,
-          hasLiked: post.likes.some(
-            (like) => like.toString() === req.user.id.toString()
-          ),
-        },
+        data: updatedPost,
       });
     } catch (err) {
       console.error("Erreur lors de la modification du post:", err);
