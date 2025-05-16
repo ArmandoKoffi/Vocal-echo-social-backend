@@ -291,8 +291,14 @@ router.post(
 
       // Formater le commentaire pour le frontend
       const formattedComment = {
-        ...newComment,
-        id: newComment._id,
+        id: newComment._id.toString(), // Assurer le format string
+        userId: user._id.toString(),
+        username: user.username,
+        avatar: user.avatar,
+        content: newComment.content,
+        audioUrl: newComment.audioUrl,
+        audioDuration: newComment.audioDuration,
+        timestamp: newComment.timestamp.toISOString(),
       };
 
       // Créer une notification si ce n'est pas l'auteur qui commente son propre post
