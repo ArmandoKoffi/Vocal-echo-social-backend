@@ -525,4 +525,24 @@ router.put(
   }
 );
 
+// @route   GET /api/posts/search
+// @desc    Rechercher des posts par description
+router.get("/search", protect, async (req, res) => {
+  try {
+    const { query } = req.query;
+    const posts = await Post.find({ 
+      description: { $regex: query, $options: 'i' }
+    }).populate('userId', 'username avatar');
+
+    const formattedPosts = await Promise.all(
+      posts.map(post => formatPostForFrontend(post, req.user.id))
+    );
+
+    res.status(200).json({ success: true, data: formattedPosts });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Erreur de recherche" });
+  }
+});
+
 module.exports = router;
