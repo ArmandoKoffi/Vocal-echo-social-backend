@@ -168,6 +168,15 @@ router.put("/:id/read", protect, async (req, res) => {
     notification.read = true;
     await notification.save();
 
+    // Émission Socket.io pour la mise à jour en temps réel
+    const io = req.app.get("io");
+    if (io) {
+      io.to(req.user.id.toString()).emit("notification:read", {
+        notificationId: notification._id,
+        userId: req.user.id
+      });
+    }
+
     res.json({
       success: true,
       data: notification,
